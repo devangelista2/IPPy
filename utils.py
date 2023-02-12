@@ -138,5 +138,3 @@ def salt_and_pepper(y, p=0.5):
     y[salt_samples] = 1
 
     return y.reshape((m, n))
-
-    

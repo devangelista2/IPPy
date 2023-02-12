@@ -4,7 +4,7 @@ from skimage import filters, restoration
 from .metrics import *
 from .operators import *
 from .solvers import *
-from .GCV_tik import *
+from .experimental.GCV_tik import *
 
 class PhiIdentity:
     def __init__(self):

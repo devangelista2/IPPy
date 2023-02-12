@@ -5,10 +5,10 @@ import os
 import tensorflow as tf 
 from tensorflow import keras as ks
 
-from . import NN_models
-from .metrics import *
-from .operators import *
-from .utils import *
+from .nn import NN_models
+from ..metrics import *
+from ..operators import *
+from ..utils import *
 
 """
 Define a Sequence that loads the data. Indeed, due to memory limitations, it is impossible to load in RAM the whole dataset.

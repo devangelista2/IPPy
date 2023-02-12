@@ -1,4 +1,4 @@
-from . import NN_utils
+from .nn import datasets
 import numpy as np
 
 class StabilizedReconstructor:
@@ -14,7 +14,7 @@ class StabilizedReconstructor:
         
         else:
             x_st = self.phi(y_delta)
-        x_rec = NN_utils.evaluate(self.gamma, x_st)
+        x_rec = datasets.evaluate(self.gamma, x_st)
         return x_rec
 
 
