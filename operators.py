@@ -5,6 +5,8 @@ from numpy.fft import fft2, ifft2, fftshift
 import scipy
 import scipy.signal
 
+import astra
+
 class Operator():
     r"""
     The main class of the library. It defines the abstract Operator that will be subclassed for any specific case.
@@ -24,6 +26,7 @@ class ConvolutionOperator(Operator):
         Represent the action of a convolution matrix A. A is obtained by a convolution operator K
         of dimension k x k and variance sigma, applied to an image x of shape n x n.
         """
+        super().__init__()
         self.kernel = kernel
         self.k = kernel.shape[0]
         self.n = img_shape[0]
@@ -74,6 +77,7 @@ class Identity(Operator):
     Defines the Identity operator (i.e. an operator that does not affect the input data).
     """
     def __init__(self, lmbda, img_shape):
+        super().__init__()
         self.lmbda = lmbda
         self.n = img_shape[0]
 
@@ -88,6 +92,7 @@ class TikhonovOperator(Operator):
     Given matrices A and L, returns the operator that acts like [A; L], concatenated vertically.
     """
     def __init__(self, A, L):
+        super().__init__()
         self.A = A
         self.L = L
 
@@ -125,9 +130,11 @@ class Gradient(Operator):
     mode = 'both' (default) generates the sum of the two filters.
     """
     def __init__(self, lmbda, img_shape, mode='both'):
+        super().__init__()
         self.mode = mode
         self.img_shape = img_shape
         self.lmbda = lmbda
+        self.shape = (img_shape[0]*img_shape[1], img_shape[0]*img_shape[1])
 
         if self.mode == 'horizontal':
             self.D = self.D_h()
@@ -162,3 +169,69 @@ class Gradient(Operator):
         filter[0, :] = np.array([1, 2, 1])
         filter[-1, :] = np.array([-1, -2, -1])
         return ConvolutionOperator(filter, self.img_shape)
+    
+class CTProjector(Operator):
+    def __init__(self, m, n, angles, det_size=None):
+        super().__init__()
+        # Input setup
+        self.m = m
+        self.n = n
+
+        # Projector setup
+        if det_size is None:
+            self.det_size = max(self.n, self.m) * np.sqrt(2)
+        else:
+            self.det_size = det_size
+        self.angles = angles
+        self.n_angles = len(angles)
+
+        # Define projector
+        self.proj = self.get_astra_projection_operator()
+        self.shape = self.proj.shape
+        
+    # ASTRA Projector
+    def get_astra_projection_operator(self):
+        # create geometries and projector
+        proj_geom = astra.create_proj_geom('parallel', 1.0, self.det_size, self.angles)
+        vol_geom = astra.create_vol_geom(self.m, self.n)
+        proj_id = astra.create_projector('linear', proj_geom, vol_geom)
+
+        return astra.OpTomo(proj_id)
+
+    # On call, project
+    def _matvec(self, x):
+        y = self.proj @ x.flatten()
+        return y
+    
+    def _adjoint(self, y):
+        x = self.proj.T @ y.flatten()
+        return x
+
+    # FBP
+    def FBP(self, y):
+        x = self.proj.reconstruct('FBP', y.flatten())
+        return x.reshape((self.m, self.n))
+    
+class ConcatenateOperator(Operator):
+    def __init__(self, A, B):
+        super().__init__()
+        self.A = A
+        self.B = B
+
+        self.mA, self.nA = A.shape
+        self.mB, self.nB = B.shape
+
+        self.shape = (self.mA + self.mB, self.nA)
+
+    def _matvec(self, x):
+        y1 = self.A(x)
+        y2 = self.B(x)
+        return np.concatenate((y1, y2), axis=0)
+
+    def _adjoint(self, y):
+        y1 = y[:self.mA]
+        y2 = y[self.mA:]
+
+        x1 = self.A.T(y1)
+        x2 = self.B.T(y2)
+        return x1 + x2
