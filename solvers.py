@@ -157,19 +157,16 @@ class ChambollePockTpV:
         self.m, self.n = A.shape
         
         # Generate Gradient operators
-        D = operators.Gradient(1, (int(np.sqrt(self.n)), int(np.sqrt(self.n))), mode='both')
-        self.Dx = D.D_h()
-        self.Dy = D.D_v()
-        self.grad = operators.ConcatenateOperator(self.Dx, self.Dy)
+        self.grad = operators.myGradient(1, (int(np.sqrt(self.n)), int(np.sqrt(self.n))))
 
         self.m, self.n = A.shape
 
-    def __call__(self, b, epsilon, lmbda, x_true, eta=2e-3, maxiter=100, p=1):
+    def __call__(self, b, epsilon, lmbda, x_true, starting_point=None, eta=2e-3, maxiter=100, p=1):
         # Compute the approximation to || A ||_2
         nu = np.sqrt(self.power_method(self.A, num_iterations=10) / self.power_method(self.grad, num_iterations=10))
 
         # Generate concatenate operator
-        K = operators.ConcatenateOperator(self.A, operators.Gradient(nu, (int(np.sqrt(self.n)), int(np.sqrt(self.n))), mode='both'))
+        K = operators.ConcatenateOperator(self.A, self.grad)
 
         Gamma = np.sqrt(self.power_method(K, num_iterations=10))
 
@@ -182,7 +179,10 @@ class ChambollePockTpV:
         k = 0
 
         # Initialization
-        x = np.zeros((self.n, 1))
+        if starting_point is None:
+            x = np.zeros((self.n, 1))
+        else:
+            x = starting_point
         y = np.zeros((self.m, 1))
         w = np.zeros((2 * self.n, 1))
 
@@ -200,15 +200,16 @@ class ChambollePockTpV:
             y = max(np.linalg.norm(yy) - (sigma*epsilon), 0) * yy / np.linalg.norm(yy)
 
             # Compute the magnitude of the gradient
-            grad_mag = np.square(self.Dx(xx)) + np.square(self.Dy(xx))
+            grad_x = self.grad(xx)
+            grad_mag = np.square(grad_x[:len(grad_x)//2]) + np.square(grad_x[len(grad_x)//2:])
 
             # Compute the reweighting factor
-            W = np.expand_dims(np.power(np.sqrt(eta**2 + grad_mag), p-1), -1)
+            W = np.expand_dims(np.power(np.sqrt(eta**2 + grad_mag) / eta, p-1), -1)
             WW = np.concatenate((W, W), axis=0)
 
             # Update w
             x_grad = np.expand_dims(self.grad(xx), -1)
-            ww = w + sigma * nu * x_grad
+            ww = w + sigma * x_grad
 
             abs_ww = np.zeros((self.n, 1))
             for i in range(self.n):
@@ -234,7 +235,8 @@ class ChambollePockTpV:
             rel_err[k] = np.linalg.norm(xx.flatten() - x_true.flatten()) / np.linalg.norm(x_true.flatten())
 
             # Compute the magnitude of the gradient of the actual iterate
-            grad_mag = np.expand_dims(np.sqrt(np.square(self.Dx(xx)) + np.square(self.Dy(xx))), -1)
+            grad_x = self.grad(xx)
+            grad_mag = np.expand_dims(np.sqrt(np.square(grad_x[:len(grad_x)//2]) + np.square(grad_x[len(grad_x)//2:])), -1)
 
             # Compute the value of TpV by reweighting
             ftpv = np.sum(np.abs(W * grad_mag))
@@ -242,7 +244,7 @@ class ChambollePockTpV:
             residues[k] = 0.5 * res + lmbda * ftpv
 
             # Stopping criteria
-            c = np.sqrt(res) / (np.max(b) * np.sqrt(self.n))
+            c = np.sqrt(res) / (np.max(b) * np.sqrt(self.m))
             if (c>= 9e-6) and (c<=1.1e-5):
                 con = False
 
