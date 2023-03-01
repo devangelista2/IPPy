@@ -194,11 +194,14 @@ class myGradient(Operator):
 
     
 class CTProjector(Operator):
-    def __init__(self, m, n, angles, det_size=None):
+    def __init__(self, m, n, angles, det_size=None, geometry='parallel'):
         super().__init__()
         # Input setup
         self.m = m
         self.n = n
+
+        # Geometry
+        self.geometry = geometry
 
         # Projector setup
         if det_size is None:
@@ -215,9 +218,19 @@ class CTProjector(Operator):
     # ASTRA Projector
     def get_astra_projection_operator(self):
         # create geometries and projector
-        proj_geom = astra.create_proj_geom('parallel', 1.0, self.det_size, self.angles)
-        vol_geom = astra.create_vol_geom(self.m, self.n)
-        proj_id = astra.create_projector('linear', proj_geom, vol_geom)
+        if self.geometry == 'parallel':
+            proj_geom = astra.create_proj_geom('parallel', 1.0, self.det_size, self.angles)
+            vol_geom = astra.create_vol_geom(self.m, self.n)
+            proj_id = astra.create_projector('linear', proj_geom, vol_geom)
+
+        elif self.geometry == 'fanflat':
+            proj_geom = astra.create_proj_geom('fanflat', 1.0, self.det_size, self.angles, 1800, 500)
+            vol_geom = astra.create_vol_geom(self.m, self.n)
+            proj_id = astra.create_projector('cuda', proj_geom, vol_geom)
+            
+        else:
+            print("Geometry (still) undefined.")
+            return None
 
         return astra.OpTomo(proj_id)
 
