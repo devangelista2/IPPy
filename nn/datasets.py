@@ -5,7 +5,7 @@ import os
 import tensorflow as tf 
 from tensorflow import keras as ks
 
-from .nn import NN_models
+from . import models
 from ..metrics import *
 from ..operators import *
 from ..utils import *

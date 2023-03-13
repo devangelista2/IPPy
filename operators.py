@@ -7,7 +7,7 @@ import scipy.signal
 
 import astra
 
-class Operator():
+class Operator(): 
     r"""
     The main class of the library. It defines the abstract Operator that will be subclassed for any specific case.
     """

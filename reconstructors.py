@@ -22,12 +22,20 @@ class VariationalReconstructor:
     def __init__(self, algorithm):
         self.algorithm = algorithm
     
-    def __call__(self, y_delta):
+    def __call__(self, y_delta, x0=None):
         if len(y_delta.shape) == 3:
             x_rec = np.zeros_like(y_delta)
             for i in range(len(y_delta)):
-                x_rec[i] = self.algorithm(y_delta[i])
+                if x0 is not None:
+                    x_rec[i] = self.algorithm(y_delta[i], starting_point=x0[i])
+                else:
+                    x_rec[i] = self.algorithm(y_delta[i])
         
         else:
-            x_rec = self.algorithm(y_delta)
+            if x0 is not None:
+                x_rec = self.algorithm(y_delta, starting_point=x0)
+            else:
+                x_rec = self.algorithm(y_delta)
         return x_rec
+
+

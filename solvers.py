@@ -3,7 +3,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from . import operators
+from . import operators, metrics, reconstructors
 
 
 class CGLS:
@@ -54,7 +54,6 @@ class CGLS:
             if info:
                 return x, err_vec
         return x
-    
 
 class ChambollePockTpV:
     def __init__(self, A):
@@ -67,7 +66,7 @@ class ChambollePockTpV:
 
         self.m, self.n = A.shape
 
-    def __call__(self, b, epsilon, lmbda, x_true, starting_point=None, eta=2e-3, maxiter=100, p=1):
+    def __call__(self, b, epsilon, lmbda, x_true=None, starting_point=None, eta=2e-3, maxiter=100, p=1):
         # Compute the approximation to || A ||_2
         nu = np.sqrt(self.power_method(self.A, num_iterations=10) / self.power_method(self.grad, num_iterations=10))
 
@@ -139,7 +138,8 @@ class ChambollePockTpV:
             xx = x + theta * (x - xtmp)
 
             # Compute relative error
-            rel_err[k] = np.linalg.norm(xx.flatten() - x_true.flatten()) / np.linalg.norm(x_true.flatten())
+            if x_true is not None:
+                rel_err[k] = np.linalg.norm(xx.flatten() - x_true.flatten()) / np.linalg.norm(x_true.flatten())
 
             # Compute the magnitude of the gradient of the actual iterate
             grad_x = self.grad(xx)
@@ -175,3 +175,12 @@ class ChambollePockTpV:
             b_k = b_k1 / b_k1_norm
 
         return b_k1_norm
+    
+    def compute_obj_value(self, x, y, lmbda, p, eta):
+        # Compute the value of the objective function TpV by reweighting
+        grad_x = np.expand_dims(self.grad(x), -1)
+        grad_mag = np.square(grad_x[:len(grad_x)//2]) + np.square(grad_x[len(grad_x)//2:])
+        W = np.power(np.sqrt(eta**2 + grad_mag) / eta, p-1)
+
+        ftpv = np.sum(np.abs(W * np.sqrt(grad_mag)))
+        return 0.5 * np.linalg.norm(self.A(x) - y, 2)**2 + lmbda * ftpv
