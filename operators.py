@@ -5,8 +5,6 @@ from numpy.fft import fft2, ifft2, fftshift
 import scipy
 import scipy.signal
 
-import astra
-
 class Operator(): 
     r"""
     The main class of the library. It defines the abstract Operator that will be subclassed for any specific case.
@@ -193,8 +191,10 @@ class myGradient(Operator):
         return D_h_T + D_v_T
 
     
-class CTProjector(Operator):
+class CTProjector(Operator):    
     def __init__(self, m, n, angles, det_size=None, geometry='parallel'):
+        import astra
+        
         super().__init__()
         # Input setup
         self.m = m
