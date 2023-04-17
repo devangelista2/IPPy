@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras as ks
 
-import _blocks
+from . import _blocks
 
 """
 NAFNet and similar from the paper Simple Baselines for Image Restoration.

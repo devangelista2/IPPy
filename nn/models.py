@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras as ks
 
-import _simple_models, _unet_models, _NAF_models
+from . import _simple_models, _unet_models, _NAF_models
 
 # 3LSSNet
 def get_SSNet(input_shape, n_ch=(128, 128, 128), k_size=(9, 5, 3), final_relu=False, skip_connection=True):
