@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name='IPPy',
-    packages=find_packages(include=['IPPy']),
+    packages=find_packages(include=['IPPy', 'IPPy.nn', 'IPPy.tomography', 'IPPy.experimental']),
     version='0.1.0',
     description='My first Python library',
     author='Davide Evangelista',
