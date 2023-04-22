@@ -7,6 +7,6 @@ setup(
     description='IPPy - Inverse Problems with Python.',
     author='Davide Evangelista',
     license='MIT',
-    install_requires=['numpy', 'matplotlib', 'scikit-image', 'tensorflow', 'tabulate'],
+    install_requires=[],
     setup_requires=[],
 )

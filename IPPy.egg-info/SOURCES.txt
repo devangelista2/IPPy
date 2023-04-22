@@ -10,7 +10,6 @@ IPPy/utils.py
 IPPy.egg-info/PKG-INFO
 IPPy.egg-info/SOURCES.txt
 IPPy.egg-info/dependency_links.txt
-IPPy.egg-info/requires.txt
 IPPy.egg-info/top_level.txt
 IPPy/experimental/GCV_tik.py
 IPPy/experimental/__init__.py
