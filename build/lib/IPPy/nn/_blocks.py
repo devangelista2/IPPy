@@ -55,11 +55,10 @@ def NAFBlock(x, c, DW_Expand=2, FFN_Expand=2):
     # Conv - Conv - SimpleGate - SimpleCA - Conv
     h = ks.layers.Conv2D(dw_channel, kernel_size=1, strides=1, padding='same', groups=1)(h)
     h = ks.layers.Conv2D(dw_channel, kernel_size=3, strides=1, padding='same', groups=1)(h)
-    h = SimpleGate(x)
+    h = SimpleGate(h)
     h = ks.layers.Multiply()([h, SimplifiedChannelAttention(h, dw_channel)])
     h = ks.layers.Conv2D(c, kernel_size=1, strides=1, padding='same', groups=1)(h)
 
-    # y = x + beta * h
     x = x + beta * h
 
     # Second Layer Normalization

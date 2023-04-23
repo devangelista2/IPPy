@@ -42,8 +42,8 @@ def NAFBlock(x, c, DW_Expand=2, FFN_Expand=2):
     from the paper: Simple Baselines for Image Restoration
     """
     # Define trainable constants
-    # beta = tf.Variable(initial_value=0, dtype=tf.float32, trainable=True)
-    # gamma = tf.Variable(initial_value=0, dtype=tf.float32, trainable=True)
+    beta = tf.Variable(initial_value=0, dtype=tf.float32, trainable=True)
+    gamma = tf.Variable(initial_value=0, dtype=tf.float32, trainable=True)
 
     # Compute the expanded channels
     dw_channel = c * DW_Expand
@@ -59,8 +59,7 @@ def NAFBlock(x, c, DW_Expand=2, FFN_Expand=2):
     h = ks.layers.Multiply()([h, SimplifiedChannelAttention(h, dw_channel)])
     h = ks.layers.Conv2D(c, kernel_size=1, strides=1, padding='same', groups=1)(h)
 
-    # x = x + beta * h
-    x = x + h
+    x = x + beta * h
 
     # Second Layer Normalization
     h = ks.layers.LayerNormalization()(x)
@@ -70,8 +69,7 @@ def NAFBlock(x, c, DW_Expand=2, FFN_Expand=2):
     h = SimpleGate(h)
     h = ks.layers.Conv2D(c, kernel_size=1, strides=1, padding='same', groups=1)(h)
 
-    # x + gamma * h
-    return x + h
+    return x + gamma * h
 
 def ChannelAttention(x, dw_channel):
     h = ks.layers.GlobalAveragePooling2D(keepdims=True)(x)
