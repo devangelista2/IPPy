@@ -8,14 +8,6 @@ To install `IPPy`, clone this GitHub repository locally by running
 git clone https://github.com/devangelista2/IPPy.git
 ```
 
-Then, move into the folder `dist` and run
-
-```
-pip install IPPy-0.1.0-py3-none-any.whl
-```
-
-This command will authomatically install the `IPPy` library and the requirements for it.
-
 ## Mathematical background and notation
 
 ### Introduction to Inverse Problems
