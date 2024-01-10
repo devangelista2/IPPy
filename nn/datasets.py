@@ -56,7 +56,17 @@ class Data2D(ks.utils.Sequence):
             x_gt = self.gt_data[i + self.batch_size*idx, :, :]
 
             if self.noise_type == 'gaussian':
-                y_delta = self.K @ x_gt # + self.noise_level * np.random.normal(0, 1, self.n**2)
+                y_delta = self.K @ x_gt + self.noise_level * np.random.normal(0, 1, self.n**2)
+            elif self.noise_type == 'gaussian_uniform':
+                # Sample Normalized Gaussian noise
+                e = np.random.normal(0, 1, self.n**2)
+                e = e / np.linalg.norm(e.flatten())
+
+                # Sample a random radius approximately lower than the radius of the Annulus
+                z = np.random.uniform(0, 1.1*np.sqrt(self.n**2)*self.noise_level)
+                
+                # Add noise
+                y_delta = self.K @ x_gt + e * z
             elif self.noise_type == 'salt_and_pepper':
                 y_delta = self.K @ x_gt
                 y_delta = salt_and_pepper(y_delta.reshape((self.m, self.n)), self.noise_level)
@@ -67,9 +77,9 @@ class Data2D(ks.utils.Sequence):
                 x[i, :, :, 0] = self.convergence_data[i + self.batch_size*idx, :, :]
 
             if self.phi is None:
-                y[i, :, :, 0] = y_delta.reshape((self.m, self.n)) + self.noise_level * np.random.normal(0, 1, (self.m, self.n))
+                y[i, :, :, 0] = y_delta.reshape((self.m, self.n))
             else:
-                y[i, :, :, 0] = self.phi(y_delta.reshape((self.m, self.n))) + self.noise_level * np.random.normal(0, 1, (self.m, self.n))
+                y[i, :, :, 0] = self.phi(y_delta.reshape((self.m, self.n)))
 
         y = y.astype('float32')
         x = x.astype('float32')
@@ -118,7 +128,7 @@ class DataFromDirectory(ks.utils.Sequence):
             x_gt = self.gt_data[i + self.batch_size*idx, :, :]
 
             if self.noise_type == 'gaussian':
-                y_delta = self.K @ x_gt # + self.noise_level * np.random.normal(0, 1, self.n**2)
+                y_delta = self.K @ x_gt
             elif self.noise_type == 'salt_and_pepper':
                 y_delta = self.K @ x_gt
                 y_delta = salt_and_pepper(y_delta.reshape((self.m, self.n)), self.noise_level)
