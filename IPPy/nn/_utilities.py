@@ -32,3 +32,21 @@ def init_weights(net: nn.Module, init_type: str = "normal", gain: float = 0.02):
 
     print("initialize network with %s" % init_type)
     net.apply(init_func)
+
+
+def get_config(model):
+    r"""
+    Return the configuration dictionary from the provided model, in the shape of
+    a dictionary.
+    """
+    out_cfg = {
+        "ch_in": model.ch_in,
+        "ch_out": model.ch_out,
+        "middle_ch": model.middle_ch,
+        "n_layers_per_block": model.n_layers_per_block,
+        "down_layers": model.down_layers,
+        "up_layers": model.up_layers,
+        "n_heads": model.n_heads,
+        "final_activation": model.final_activation,
+    }
+    return out_cfg

@@ -6,7 +6,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import torch
 
-from IPPy.nn import models, train
+from IPPy.nn import models, trainer
+from IPPy import utilities
 from IPPy.utilities import data
 
 #################################################
@@ -17,22 +18,24 @@ target_path = (
     "../data/Mayo/train"  # This is an example, having input = output is useless
 )
 data_shape = 128  # We want to work on (N, 1, 128, 128) slices
-device = "cuda" if torch.cuda.is_available() else "cpu"  # set the device
+device = utilities.get_device()
+print(f"Device used: {device}.")
 
-final_activation = (
-    "sigmoid"  # THe final activation can be eiter "sigmoid", "relu" or None
-)
-middle_ch = [
-    64,
-    128,
-    256,
-    512,
-    1024,
-]  # Number of channels at each resolution level of ResUNet
+# Define config for UNet
+model_config = {
+    "ch_in": 1,
+    "ch_out": 1,
+    "middle_ch": [32, 64, 128],
+    "n_layers_per_block": 2,
+    "down_layers": ("ResDownBlock", "AttentionDownBlock"),
+    "up_layers": ("AttentionUpBlock", "ResUpBlock"),
+    "n_heads": 8,
+    "final_activation": "relu",
+}
 
 n_epochs = 50  # Number of epochs
 batch_size = 4  # Number of samples per batch
-weights_path = "../model_weights/example.pth"
+weights_path = "./model_weights/example"
 
 #################################################
 ### PREPARATION
@@ -44,19 +47,14 @@ train_data = data.TrainDataset(
 )
 
 # Define model and send to the chosen device
-model = models.ResUNet(
-    input_ch=1, output_ch=1, middle_ch=middle_ch, final_activation=final_activation
-).to(device)
+model = models.UNet(**model_config).to(device)
 
 #################################################
 ### EXECUTION
 #################################################
-train.train(
+trainer.train(
     model, train_data, n_epochs=n_epochs, batch_size=batch_size, device=device
 )  # Yes, training a model is THAT easy
 
 # Save the model weights
-torch.save(
-    model.state_dict(),
-    weights_path,
-)
+trainer.save(model, weights_path)

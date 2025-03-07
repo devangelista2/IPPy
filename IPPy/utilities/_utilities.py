@@ -18,6 +18,22 @@ def create_path_if_not_exists(path: str) -> None:
         os.makedirs(path)
 
 
+def get_device() -> None:
+    r"""
+    Return the best possible device. In particular, if "cuda" is available, it returns
+    "cuda". If "mps" is avabilable, it returns "mps". Otherwise, it returns "cpu".
+    """
+    try:
+        if torch.mps.is_available():
+            return "mps"
+    except:
+        pass
+
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 def normalize(x: torch.Tensor) -> torch.Tensor:
     r"""
     Given an array x, returns its normalized version (i.e. the linear projection into [0, 1]).

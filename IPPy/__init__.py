@@ -17,5 +17,4 @@ variational = {
 
 neural_network = {
     "UNet": models.UNet,
-    "ResUNet": models.ResUNet,
 }
