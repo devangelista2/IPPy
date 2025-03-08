@@ -1,12 +1,12 @@
 import os
 import sys
 
+import torch
+
 # Add the parent directory of 'examples/' to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import torch
-
-from IPPy.nn import models, trainer
+from IPPy.nn import models, trainer, losses
 from IPPy import utilities
 from IPPy.utilities import data
 
@@ -35,7 +35,7 @@ model_config = {
 
 n_epochs = 50  # Number of epochs
 batch_size = 4  # Number of samples per batch
-weights_path = "./model_weights/example"
+weights_path = "./examples/model_weights/MixedLoss"
 
 #################################################
 ### PREPARATION
@@ -49,11 +49,34 @@ train_data = data.TrainDataset(
 # Define model and send to the chosen device
 model = models.UNet(**model_config).to(device)
 
+# Define optimizer
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+
+# Loss function
+loss_fn = losses.MixedLoss(
+    loss_vec=(
+        torch.nn.MSELoss(),
+        losses.FourierLoss(),
+        losses.SSIMLoss(),
+    ),
+    weight_parameters=(
+        1,
+        0.01,
+        0.1,
+    ),
+)
+
 #################################################
 ### EXECUTION
 #################################################
 trainer.train(
-    model, train_data, n_epochs=n_epochs, batch_size=batch_size, device=device
+    model,
+    train_data,
+    optimizer,
+    loss_fn,
+    n_epochs=n_epochs,
+    batch_size=batch_size,
+    device=device,
 )  # Yes, training a model is THAT easy
 
 # Save the model weights

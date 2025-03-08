@@ -121,6 +121,5 @@ class UNet(nn.Module):
             if self.final_activation.lower() == "sigmoid":
                 return nn.Sigmoid()(self.postprocess(h))
             elif self.final_activation.lower() == "relu":
-                self.final_activation = nn.ReLU()
                 return nn.ReLU()(self.postprocess(h))
         return self.postprocess(h)

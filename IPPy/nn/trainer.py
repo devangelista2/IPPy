@@ -7,12 +7,14 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..utilities import _utilities, metrics
 from . import _utilities as nn_utils
+from . import models
 import json
 
 
 def train(
     model: nn.Module,
     training_data: Dataset,
+    optimizer: torch.optim.Optimizer,
     loss_fn=nn.MSELoss(),
     n_epochs: int = 50,
     batch_size: int = 4,
@@ -36,9 +38,6 @@ def train(
     """
 
     ### Initialize training
-    # Loss function
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
     # Define dataloader
     train_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
 
@@ -109,10 +108,26 @@ def save(model: nn.Module, weights_path: str):
 
     # Save model configuration as json
     with open(f"{weights_path}/config.json", "w") as fp:
-        json.dump(model_config, fp)
+        json.dump(model_config, fp, indent=2)
 
     # Save model weights
     torch.save(
         model.state_dict(),
         f"{weights_path}/weights.pth",
     )
+
+
+def load(weights_path: str):
+    r"""
+    Load a trained model from the given path.
+    """
+    # Load configuration
+    with open(f"{weights_path}/config.json") as fp:
+        model_config = json.load(fp)
+
+    # Get model by configuration
+    model = models.UNet(**model_config)
+
+    # Load model weights
+    model.load_state_dict(torch.load(f"{weights_path}/weights.pth"))
+    return model
