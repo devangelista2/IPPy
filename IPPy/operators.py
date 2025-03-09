@@ -1,6 +1,9 @@
 import astra
 import numpy as np
+
+import math
 import torch
+import torch.nn.functional as F
 
 
 class Operator:
@@ -13,12 +16,12 @@ class Operator:
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         # Compute y = Kx on the first element x
-        y = self._matvec(x[0])
+        y = self._matvec(x[0].unsqueeze(0))
 
         # In case there are multiple x, compute y = Kx on all of them
         if x.shape[0] > 1:
             for i in range(1, x.shape[0]):
-                y = torch.cat((y, self._matvec(x[i])))
+                y = torch.cat((y, self._matvec(x[i].unsqueeze(0))))
         return y
 
     def __matmul__(self, x: torch.Tensor) -> torch.Tensor:
@@ -26,12 +29,12 @@ class Operator:
 
     def T(self, y: torch.Tensor) -> torch.Tensor:
         # Compute x = K^Tx on the first element y
-        x = self._adjoint(y[0])
+        x = self._adjoint(y[0].unsqueeze(0))
 
         # In case there are multiple y, compute x = K^Ty on all of them
         if y.shape[0] > 1:
             for i in range(1, y.shape[0]):
-                x = torch.cat((x, self._matvec(y[i])))
+                x = torch.cat((x, self._matvec(y[i].unsqueeze(0))))
         return x
 
 
@@ -117,6 +120,146 @@ class CTProjector(Operator):
         return x
 
 
+class Blurring(Operator):
+    def __init__(
+        self,
+        kernel: torch.Tensor = None,
+        kernel_type: str = None,
+        kernel_size: int = 3,
+        kernel_variance: float = 1.0,
+        motion_angle: float = 0.0,
+    ):
+        """
+        Blurring operator using convolution.
+
+        Parameters:
+        - kernel (torch.Tensor, optional): Custom kernel for convolution. If `kernel_type` is provided, this is ignored.
+        - kernel_type (str, optional): Type of kernel to use. Supports 'gaussian' and 'motion'.
+        - kernel_size (int, optional): Size of the kernel (for 'gaussian' and 'motion'). Must be an odd integer.
+        - kernel_variance (float, optional): Variance of the Gaussian kernel (only used if kernel_type='gaussian').
+        - motion_angle (float, optional): Angle of motion blur in degrees (only used if kernel_type='motion').
+        """
+        super().__init__()
+
+        if kernel_type is not None:
+            if kernel_type == "gaussian":
+                if kernel_size % 2 == 0:
+                    raise ValueError("Kernel size must be an odd integer.")
+                self.kernel = self._generate_gaussian_kernel(
+                    kernel_size, kernel_variance
+                )
+            elif kernel_type == "motion":
+                if kernel_size % 2 == 0:
+                    raise ValueError("Kernel size must be an odd integer.")
+                self.kernel = self._generate_motion_kernel(kernel_size, motion_angle)
+            else:
+                raise ValueError("kernel_type must be either 'gaussian' or 'motion'")
+        elif kernel is None:
+            raise ValueError("Either `kernel` or `kernel_type` must be provided.")
+        else:
+            self.kernel = kernel
+
+        # Ensure kernel is a 4D tensor with shape (out_channels, in_channels, k, k)
+        if len(self.kernel.shape) == 2:
+            self.kernel = self.kernel.unsqueeze(0)
+
+        if len(self.kernel.shape) == 3:
+            # Meaning only the batch dimension in missing
+            self.kernel = self.kernel.unsqueeze(0)
+
+    def _generate_gaussian_kernel(
+        self, kernel_size: int, kernel_variance: float
+    ) -> torch.Tensor:
+        """
+        Generates a Gaussian kernel with the given size and variance.
+        """
+        ax = torch.arange(kernel_size) - kernel_size // 2
+        xx, yy = torch.meshgrid(ax, ax, indexing="ij")
+        kernel = torch.exp(-(xx**2 + yy**2) / (2 * kernel_variance))
+        kernel /= kernel.sum()  # Normalize kernel to sum to 1
+        return kernel
+
+    def _generate_motion_kernel(self, kernel_size: int, angle: float) -> torch.Tensor:
+        """
+        Generates a motion blur kernel that blurs in a linear direction.
+        """
+        kernel = torch.zeros((kernel_size, kernel_size), dtype=torch.float32)
+        center = kernel_size // 2
+        angle = math.radians(angle)
+
+        # Compute motion blur direction
+        dx, dy = math.cos(angle), math.sin(angle)
+        for i in range(kernel_size):
+            x = int(center + (i - center) * dx)
+            y = int(center + (i - center) * dy)
+            if 0 <= x < kernel_size and 0 <= y < kernel_size:
+                kernel[y, x] = 1.0
+
+        kernel /= kernel.sum()  # Normalize to keep intensity unchanged
+        return kernel
+
+    def _matvec(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the blurring operator (forward convolution).
+        """
+        blurred = F.conv2d(x, self.kernel, padding="same")  # Apply convolution
+        return blurred
+
+    def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the adjoint operator, which in this case is also a convolution
+        with a flipped kernel (assuming symmetric kernels like Gaussian).
+        """
+        flipped_kernel = torch.flip(self.kernel, dims=[2, 3])  # Flip spatial dimensions
+        adjoint_result = F.conv2d(y, flipped_kernel, padding="same")
+        return adjoint_result
+
+
+class DownScaling(Operator):
+    def __init__(self, downscale_factor: int, mode: str = "avg"):
+        """
+        Initializes the DownScaling operator.
+
+        Parameters:
+        - downscale_factor (int): The factor by which the input is downscaled.
+        - mode (str): The type of downscaling, either "avg" (average pooling) or "naive" (removes odd indices).
+        """
+        super().__init__()
+        self.downscale_factor = downscale_factor
+        if mode not in ["avg", "naive"]:
+            raise ValueError("mode must be either 'avg' or 'naive'")
+        self.mode = mode
+
+    def _matvec(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the downscaling operator.
+        """
+        factor = self.downscale_factor
+        if self.mode == "avg":
+            y = F.avg_pool2d(x, factor, stride=factor)
+        elif self.mode == "naive":
+            y = x[..., ::factor, ::factor]  # Take every 'factor'-th element
+        return y
+
+    def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the transposed operator (true adjoint).
+        """
+        factor = self.downscale_factor
+        if self.mode == "avg":
+            # Spread values uniformly back
+            y_upsampled = F.interpolate(y, scale_factor=factor, mode="nearest")
+            x_out = y_upsampled / (factor**2)  # Normalize to preserve energy
+        elif self.mode == "naive":
+            # Create a zero-filled tensor of the original size
+            N, C, H, W = y.shape
+            H_up, W_up = H * factor, W * factor
+            x_up = torch.zeros((N, C, H_up, W_up), device=y.device, dtype=y.dtype)
+            x_up[..., ::factor, ::factor] = y  # Insert values at correct locations
+            x_out = x_up
+        return x_out
+
+
 class Gradient(Operator):
     r"""
     Implements the Gradient operator, acting on standardized Pytorch tensors of shape (N, 1, nx, ny) and returning a tensor of
@@ -131,17 +274,17 @@ class Gradient(Operator):
         self.mx, self.my = img_shape
 
     def _matvec(self, x: torch.Tensor) -> torch.Tensor:
-        c, nx, ny = x.shape
-        D_h = torch.diff(x, n=1, dim=1, prepend=torch.zeros((c, 1, ny))).unsqueeze(0)
-        D_v = torch.diff(x, n=1, dim=2, prepend=torch.zeros((c, nx, 1))).unsqueeze(0)
+        N, c, nx, ny = x.shape
+        D_h = torch.diff(x, n=1, dim=1, prepend=torch.zeros((N, c, 1, ny))).unsqueeze(0)
+        D_v = torch.diff(x, n=1, dim=2, prepend=torch.zeros((N, c, nx, 1))).unsqueeze(0)
 
         return torch.cat((D_h, D_v), dim=1)
 
     def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
-        c, nx, ny = y.shape
+        N, c, nx, ny = y.shape
 
-        D_h = y[0, :, :]
-        D_v = y[1, :, :]
+        D_h = y[0, 0, :, :]
+        D_v = y[0, 1, :, :]
 
         D_h_T = (
             torch.flipud(

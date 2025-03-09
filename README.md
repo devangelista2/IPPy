@@ -14,7 +14,7 @@ IPPy is built upon a few commonly used libraries for tensor manipulation, linear
 - `PIL`
 - `matplotlib`
 
-Moreover, it is strongly required to have access to a cuda GPU, both for training neural network models and for fast Computed Tomography simulations.
+Moreover, it is **required** to have access to a cuda GPU, both for training neural network models and for fast Computed Tomography simulations. In particular, some `Astra-toolbox` operators won't work if CUDA is not available.
 
 ## Data
 You can use you own data to test. We provide a few example dataset to play with IPPy, which is also required to run the examples on the `examples/` folder, namely a modified version of the Mayo's dataset, and the COULE dataset:
