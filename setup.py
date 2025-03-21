@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="IPPy",
+    name="inverse-problems-Python",
     version="1.0.0",
     description="Inverse Problems with Python.",
     author="Davide Evangelista",
