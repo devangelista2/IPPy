@@ -6,36 +6,72 @@ import torch
 import torch.nn.functional as F
 
 
+class OperatorFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, op, x):
+        """Forward pass: applies op._matvec to each (c, h, w)"""
+        device = x.device
+        ctx.op = op  # Store the operator for backward pass
+
+        # Initialize output tensor
+        batch_size = x.shape[0]
+        y = []
+
+        # Apply the operator to each sample in the batch (over the batch dimension)
+        for i in range(batch_size):
+            y_i = op._matvec(x[i].unsqueeze(0))  # Apply to each (c, h, w) tensor
+            y.append(y_i)
+
+        # Stack the results back into a batch
+        y = torch.cat(y, dim=0)
+        ctx.save_for_backward(x)  # Save input for gradient computation
+        return y.to(device)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """Backward pass: applies op._adjoint to each (c, h, w)"""
+        op = ctx.op
+        device = grad_output.device
+
+        # Initialize gradient input tensor
+        batch_size = grad_output.shape[0]
+        grad_input = []
+
+        # Apply the adjoint operator to each element in the batch
+        for i in range(batch_size):
+            grad_i = op._adjoint(
+                grad_output[i].unsqueeze(0)
+            )  # Apply adjoint to each (c, h, w)
+            grad_input.append(grad_i)
+
+        # Stack the gradients back into a batch
+        grad_input = torch.cat(grad_input, dim=0)
+
+        return None, grad_input.to(device)  # No gradient for `op`, only `x`
+
+
 class Operator:
-    r"""
-    Defines the abstract Operator that will be subclassed for any specific case. It acts on standardized PyTorch tensors, i.e.
-    tensors with shape (N, c, nx, ny), where N is the batch size, c is the number of channels in the data, nx and ny are the
-    data spatial resolution. Each operator acts in parallel over the N elements of the batch. The input tensors are also assumed
-    to be normalized in [0, 1]
-    """
-
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
-        # Compute y = Kx on the first element x
-        y = self._matvec(x[0].unsqueeze(0))
-
-        # In case there are multiple x, compute y = Kx on all of them
-        if x.shape[0] > 1:
-            for i in range(1, x.shape[0]):
-                y = torch.cat((y, self._matvec(x[i].unsqueeze(0))))
-        return y
+        """Applies operator using PyTorch autograd wrapper"""
+        return OperatorFunction.apply(self, x)
 
     def __matmul__(self, x: torch.Tensor) -> torch.Tensor:
+        """Matrix-vector multiplication"""
         return self.__call__(x)
 
     def T(self, y: torch.Tensor) -> torch.Tensor:
-        # Compute x = K^Tx on the first element y
-        x = self._adjoint(y[0].unsqueeze(0))
+        """Transpose operator (adjoint)"""
+        device = y.device
+        # Apply adjoint to the batch
+        return self._adjoint(y).to(device).requires_grad_(True)
 
-        # In case there are multiple y, compute x = K^Ty on all of them
-        if y.shape[0] > 1:
-            for i in range(1, y.shape[0]):
-                x = torch.cat((x, self._matvec(y[i].unsqueeze(0))))
-        return x
+    def _matvec(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the operator to a single (c, h, w) tensor"""
+        raise NotImplementedError
+
+    def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        """Apply the adjoint operator to a single (c, h, w) tensor"""
+        raise NotImplementedError
 
 
 class CTProjector(Operator):
@@ -98,12 +134,17 @@ class CTProjector(Operator):
 
     # On call, project
     def _matvec(self, x: torch.Tensor) -> torch.Tensor:
-        y = self.proj @ x.flatten().numpy()
-        return torch.tensor(y.reshape((1, 1, self.mx, self.my)))
+        x_np = x.cpu().numpy().flatten()
+        y_np = self.proj @ x_np
+        return torch.tensor(
+            y_np.reshape((1, 1, self.mx, self.my)), device=x.device
+        )  # Convert back to PyTorch
 
     def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
-        x = self.proj.T @ y.flatten().numpy()
-        return torch.tensor(x.reshape((1, 1, self.nx, self.ny)))
+        """CT backprojection: Converts PyTorch -> NumPy, restores channel"""
+        y_np = y.cpu().numpy().flatten()
+        x_np = self.proj.T @ y_np.flatten()  # ASTRA expects (sinogram_dim, proj)
+        return torch.tensor(x_np.reshape((1, 1, self.nx, self.ny)), device=y.device)
 
     # FBP
     def FBP(self, y: torch.Tensor) -> torch.Tensor:
