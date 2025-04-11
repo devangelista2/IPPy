@@ -249,7 +249,9 @@ class Blurring(Operator):
         """
         Applies the blurring operator (forward convolution).
         """
-        blurred = F.conv2d(x, self.kernel, padding="same")  # Apply convolution
+        blurred = F.conv2d(
+            x, self.kernel.to(x.device), padding="same"
+        )  # Apply convolution
         return blurred
 
     def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
@@ -258,7 +260,7 @@ class Blurring(Operator):
         with a flipped kernel (assuming symmetric kernels like Gaussian).
         """
         flipped_kernel = torch.flip(self.kernel, dims=[2, 3])  # Flip spatial dimensions
-        adjoint_result = F.conv2d(y, flipped_kernel, padding="same")
+        adjoint_result = F.conv2d(y, flipped_kernel.to(y.device), padding="same")
         return adjoint_result
 
 
