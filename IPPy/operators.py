@@ -1,4 +1,3 @@
-import astra
 import numpy as np
 
 import math
@@ -111,6 +110,8 @@ class CTProjector(Operator):
 
     # ASTRA Projector
     def _get_astra_projection_operator(self):
+        import astra
+
         # create geometries and projector
         if self.geometry == "parallel":
             proj_geom = astra.create_proj_geom(
@@ -164,6 +165,7 @@ class CTProjector(Operator):
 class Blurring(Operator):
     def __init__(
         self,
+        img_shape: tuple[int],
         kernel: torch.Tensor = None,
         kernel_type: str = None,
         kernel_size: int = 3,
@@ -181,6 +183,10 @@ class Blurring(Operator):
         - motion_angle (float, optional): Angle of motion blur in degrees (only used if kernel_type='motion').
         """
         super().__init__()
+
+        # Shape setup
+        self.nx, self.ny = img_shape
+        self.mx, self.my = img_shape
 
         if kernel_type is not None:
             if kernel_type == "gaussian":
@@ -257,7 +263,12 @@ class Blurring(Operator):
 
 
 class DownScaling(Operator):
-    def __init__(self, downscale_factor: int, mode: str = "avg"):
+    def __init__(
+        self,
+        img_shape: tuple[int],
+        downscale_factor: int,
+        mode: str = "avg",
+    ):
         """
         Initializes the DownScaling operator.
 
@@ -266,6 +277,11 @@ class DownScaling(Operator):
         - mode (str): The type of downscaling, either "avg" (average pooling) or "naive" (removes odd indices).
         """
         super().__init__()
+
+        # Shape setup
+        self.nx, self.ny = img_shape
+        self.mx, self.my = self.nx // downscale_factor, self.ny // downscale_factor
+
         self.downscale_factor = downscale_factor
         if mode not in ["avg", "naive"]:
             raise ValueError("mode must be either 'avg' or 'naive'")
@@ -316,8 +332,8 @@ class Gradient(Operator):
 
     def _matvec(self, x: torch.Tensor) -> torch.Tensor:
         N, c, nx, ny = x.shape
-        D_h = torch.diff(x, n=1, dim=1, prepend=torch.zeros((N, c, 1, ny))).unsqueeze(0)
-        D_v = torch.diff(x, n=1, dim=2, prepend=torch.zeros((N, c, nx, 1))).unsqueeze(0)
+        D_h = torch.diff(x, n=1, dim=2, prepend=torch.zeros((N, c, 1, ny)))
+        D_v = torch.diff(x, n=1, dim=3, prepend=torch.zeros((N, c, nx, 1)))
 
         return torch.cat((D_h, D_v), dim=1)
 

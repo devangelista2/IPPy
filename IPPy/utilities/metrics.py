@@ -58,8 +58,8 @@ def SSIM(x_pred: torch.Tensor, x_true: torch.Tensor) -> float:
     Compute the SSIM between two input tensors x_pred and x_true. Both are assumed to be in the range [0, 1].
     """
     return ssim(
-        x_pred[0, 0].numpy(),
-        x_true[0, 0].numpy(),
+        x_pred[0, 0].detach().numpy(),
+        x_true[0, 0].detach().numpy(),
         data_range=1,
     )
 
