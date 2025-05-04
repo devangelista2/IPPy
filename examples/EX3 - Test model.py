@@ -7,8 +7,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import numpy as np
 import torch
 
-from IPPy import operators, solvers, utilities
-from IPPy.nn import models
+from IPPy import operators, utilities, solvers
+from IPPy.nn import models, trainer
 from IPPy.utilities import data, metrics
 
 #################################################
@@ -75,11 +75,8 @@ K = operators.CTProjector(
 # Initialize solver
 solver = solvers.ChambollePockTpVUnconstrained(K)
 
-# Define model, send to device and load weights
-model = models.ResUNet(
-    input_ch=1, output_ch=1, middle_ch=middle_ch, final_activation=final_activation
-).to(device)
-model.load_state_dict(torch.load(weights_path))
+# Define a model and load its weights
+model = trainer.load(weights_path).to(device)
 
 #################################################
 ### EXECUTION

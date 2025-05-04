@@ -8,7 +8,7 @@ import torch
 # Add the parent directory of 'examples/' to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from IPPy import operators, solvers, utilities
+from IPPy import operators, utilities, solvers
 from IPPy.utilities import data, metrics
 
 #################################################
@@ -56,8 +56,9 @@ angles = np.linspace(np.deg2rad(start_angle), np.deg2rad(end_angle), n_angles)
 K = operators.CTProjector(
     img_shape=(data_shape, data_shape),
     angles=angles,
-    det_size=det_size,
     geometry=geometry,
+    source_origin=1800,
+    origin_det=500,
 )
 
 # Initialize solver
@@ -73,7 +74,7 @@ for i in range(len(gt_data)):
     # Load sample
     x_true, img_name = gt_data[i]
     print(
-        f"({utilities.formatted_time(start_time)}) Processing {img_name} ({i+1} / {len(gt_data)}).",
+        f"({utilities.formatted_time(start_time)}) Processing {img_name} ({i+1}/{len(gt_data)}).",
         end=" ",
     )
 
@@ -97,7 +98,3 @@ for i in range(len(gt_data)):
         f"RE = {metrics.RE(x_sol, x_true):0.4f}, ",
         f"PSNR = {metrics.PSNR(x_sol, x_true):0.4f}, SSIM = {metrics.SSIM(x_sol, x_true):0.4f}.",
     )
-
-    # Save
-    save_path = f"./{i}.png"
-    utilities.save_image(x_sol, save_path)

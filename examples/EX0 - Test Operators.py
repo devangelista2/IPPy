@@ -19,15 +19,20 @@ gt_data = data.ImageDataset(data_path="../data/Mayo/test", data_shape=256)
 x_true, _ = gt_data[10]
 
 # Define operator
-# K = operators.CTProjector(
-#     img_shape=(256, 256),
-#     angles=np.linspace(0, np.pi, 60),
-#     det_size=512,
-#     geometry="parallel",
-# )
+K = operators.CTProjector(
+    img_shape=(256, 256),
+    angles=np.linspace(0, np.pi, 60),
+    det_size=512,
+    geometry="fanflat",
+)
 # K = operators.DownScaling(downscale_factor=2, mode="naive")
 # K = operators.DownScaling(downscale_factor=2, mode="avg")
-K = operators.Blurring(kernel_type="gaussian", kernel_size=3, kernel_variance=1)
+# K = operators.Blurring(
+#     img_shape=(256, 256),
+#     kernel_type="gaussian",
+#     kernel_size=3,
+#     kernel_variance=1,
+# )
 
 # Compute corruption
 y = K(x_true)

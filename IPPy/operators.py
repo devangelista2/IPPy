@@ -4,6 +4,29 @@ import math
 import torch
 import torch.nn.functional as F
 
+import warnings  # To warn if falling back to CPU
+
+# Try importing CuPy
+try:
+    import cupy
+
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+    warnings.warn(
+        "CuPy not found. GPU acceleration for ASTRA via CuPy will be disabled."
+    )
+
+# Try importing ASTRA
+try:
+    import astra
+
+    ASTRA_AVAILABLE = True
+except ImportError:
+    ASTRA_AVAILABLE = False
+    warnings.warn("ASTRA toolbox not found. CTProjector will not work.")
+    # You might want to raise an error or handle this more gracefully
+
 
 class OperatorFunction(torch.autograd.Function):
     @staticmethod
@@ -75,8 +98,24 @@ class Operator:
 
 class CTProjector(Operator):
     r"""
-    Implements a CTProjector operator, given the image shape in the form of a tuple (nx, ny), the angular acquisitions in the form
-    of a numpy array (theta_1, theta_2, ..., theta_n), the detector size and the type of geometry.
+    Implements a CTProjector operator using the ASTRA toolbox.
+
+    Automatically attempts to use CUDA-accelerated projectors and CuPy for
+    GPU tensors if CUDA is available and CuPy is installed. Falls back to
+    CPU-based projectors and NumPy operations otherwise, or if the input
+    tensor is on the CPU.
+
+    Ensures the output tensor is on the same device as the input tensor.
+
+    Parameters:
+        img_shape (tuple[int]): Shape of the input image (nx, ny).
+        angles (np.array): Array of projection angles in radians.
+        det_size (int | None): Number of detector pixels. Defaults to 2*max(nx, ny).
+        geometry (str): Type of geometry ('parallel' or 'fanflat').
+        force_cpu (bool): If True, forces CPU usage even if CUDA is available. Default: False.
+        # Optional Fanflat parameters (can be added if needed)
+        # source_origin (float): Distance source to origin (for fanflat).
+        # origin_det (float): Distance origin to detector (for fanflat).
     """
 
     def __init__(
@@ -85,81 +124,391 @@ class CTProjector(Operator):
         angles: np.array,
         det_size: int | None = None,
         geometry: str = "parallel",
+        source_origin: float = 1800.0,
+        origin_det: float = 500.0,
+        force_cpu: bool = False,
     ) -> None:
         super().__init__()
+
+        if not ASTRA_AVAILABLE:
+            raise ImportError(
+                "ASTRA toolbox is required for CTProjector but not found."
+            )
+
         # Input setup
         self.nx, self.ny = img_shape
-
-        # Geometry
         self.geometry = geometry
+        self.angles = angles
+        self.n_angles = len(angles)
+
+        self.source_origin = source_origin
+        self.origin_det = origin_det
 
         # Projector setup
         if det_size is None:
-            self.det_size = 2 * int(max(self.nx, self.ny))
+            # Ensure reasonable default, maybe link to image diagonal?
+            diag = np.sqrt(self.nx**2 + self.ny**2)
+            self.det_size = 2 * int(np.ceil(diag / 2.0))  # Often needs padding
         else:
             self.det_size = det_size
-        self.angles = angles
-        self.n_angles = len(angles)
 
         # Set sinogram shape
         self.mx, self.my = self.n_angles, self.det_size
 
-        # Define projector
-        self.proj = self._get_astra_projection_operator()
-        self.shape = self.proj.shape
+        # Determine if GPU should be used
+        self.use_gpu = torch.cuda.is_available() and CUPY_AVAILABLE and not force_cpu
+        if force_cpu and torch.cuda.is_available():
+            warnings.warn("CUDA is available but CTProjector is forced to use CPU.")
+        elif not torch.cuda.is_available() and not force_cpu:
+            print("CUDA not available. CTProjector will use CPU.")
+        elif not CUPY_AVAILABLE and torch.cuda.is_available() and not force_cpu:
+            warnings.warn(
+                "CUDA available but CuPy not found. CTProjector limited to CPU operations for ASTRA data transfer."
+            )
+            # Force CPU mode if CuPy isn't there for GPU data handling
+            self.use_gpu = False
 
-    # ASTRA Projector
+        # Define projector based on availability
+        self.proj, self.proj_id, self.vol_geom, self.proj_geom = (
+            self._get_astra_projection_operator()
+        )
+        if self.proj is None:
+            # Handle case where projector creation failed in the method
+            raise RuntimeError("Failed to create ASTRA projector.")
+
+        # Store shape info if OpTomo provides it
+        try:
+            # OpTomo shape might be (output_flat_dim, input_flat_dim)
+            self.astra_shape = self.proj.shape
+        except AttributeError:
+            self.astra_shape = None  # Or calculate from mx*my, nx*ny
+
+        # Determine reconstruction algorithm based on GPU availability
+        if self.use_gpu:
+            # Check if FBP_CUDA is actually available in ASTRA install
+            # This requires testing or a more robust check
+            self.fbp_algorithm = "FBP_CUDA"  # Or other CUDA FBP variants if needed
+        else:
+            self.fbp_algorithm = "FBP"  # Standard CPU FBP
+
+        print(
+            f"CTProjector initialized. Geometry: {self.geometry}. Using GPU: {self.use_gpu}. FBP Algorithm: {self.fbp_algorithm}"
+        )
+
     def _get_astra_projection_operator(self):
-        import astra
+        """Creates ASTRA geometries and the projector object."""
+        vol_geom = astra.create_vol_geom(self.nx, self.ny)
 
-        # create geometries and projector
+        # Determine the base projector type based on GPU availability
+        gpu_projector_available = (
+            self.use_gpu
+        )  # True if CUDA available, CuPy installed, not forced CPU
+
         if self.geometry == "parallel":
             proj_geom = astra.create_proj_geom(
                 "parallel", 1.0, self.det_size, self.angles
             )
-            vol_geom = astra.create_vol_geom(self.nx, self.ny)
-            proj_id = astra.create_projector("linear", proj_geom, vol_geom)
+            # Use 'cuda' if possible for GPU, otherwise 'linear' for CPU
+            if gpu_projector_available:
+                projector_type = "cuda"
+            else:
+                projector_type = "linear"
 
         elif self.geometry == "fanflat":
+            # Fanflat often requires GPU for reasonable speed
             proj_geom = astra.create_proj_geom(
-                "fanflat", 1.0, self.det_size, self.angles, 1800, 500
+                "fanflat",
+                1.0,
+                self.det_size,
+                self.angles,
+                self.source_origin,
+                self.origin_det,
             )
-            vol_geom = astra.create_vol_geom(self.nx, self.ny)
-            proj_id = astra.create_projector("cuda", proj_geom, vol_geom)
+            if gpu_projector_available:
+                projector_type = "cuda"
+            else:
+                # Use a valid CPU fan-beam projector type like 'strip'
+                projector_type = "line_fanflat"
+                warnings.warn(
+                    f"Using CPU projector type '{projector_type}' for fanflat geometry. This might be very slow."
+                )
 
         else:
-            print("Geometry (still) undefined.")
-            return None
+            print(f"Geometry '{self.geometry}' is not supported.")
+            # Return None values to indicate failure
+            return None, None, None, None
 
-        return astra.OpTomo(proj_id)
+        # Create projector
+        try:
+            print(
+                f"Attempting to create ASTRA projector type: '{projector_type}' for '{self.geometry}' geometry..."
+            )
+            proj_id = astra.create_projector(projector_type, proj_geom, vol_geom)
+            proj = astra.OpTomo(proj_id)
+            print(f"Successfully created ASTRA projector type: '{projector_type}'")
+            # If we intended GPU but ended up with a CPU type due to fallback logic below, update self.use_gpu
+            if gpu_projector_available and projector_type != "cuda":
+                warnings.warn(
+                    f"Projector creation resulted in CPU type '{projector_type}' despite GPU request. Adjusting."
+                )
+                self.use_gpu = False
+                self.fbp_algorithm = "FBP"  # Ensure FBP algo is also CPU
+            return proj, proj_id, vol_geom, proj_geom
 
-    # On call, project
+        except Exception as e:
+            print(f"Error creating ASTRA projector type '{projector_type}': {e}")
+            # Fallback attempt (e.g., try CPU 'linear' for parallel if 'cuda' failed, or CPU 'strip' for fanflat if 'cuda' failed)
+            fallback_tried = False
+            if (
+                gpu_projector_available
+            ):  # Only try fallback if GPU was initially attempted
+                if self.geometry == "parallel" and projector_type != "linear":
+                    fallback_type = "linear"
+                elif self.geometry == "fanflat" and projector_type != "strip":
+                    fallback_type = "strip"
+                else:
+                    fallback_type = None  # No fallback specified for this case
+
+                if fallback_type:
+                    warnings.warn(
+                        f"Falling back to CPU projector '{fallback_type}' due to error."
+                    )
+                    try:
+                        proj_id = astra.create_projector(
+                            fallback_type, proj_geom, vol_geom
+                        )
+                        proj = astra.OpTomo(proj_id)
+                        self.use_gpu = False  # Update flag as we fell back to CPU
+                        self.fbp_algorithm = "FBP"  # Update FBP algo too
+                        print(
+                            f"Successfully created ASTRA projector type: '{fallback_type}' (Fallback)"
+                        )
+                        fallback_tried = True
+                        return proj, proj_id, vol_geom, proj_geom
+                    except Exception as e2:
+                        print(f"Fallback projector creation failed: {e2}")
+
+            # If initial creation and fallback failed
+            print("Failed to create any suitable ASTRA projector.")
+            return None, None, None, None
+
     def _matvec(self, x: torch.Tensor) -> torch.Tensor:
-        x_np = x.cpu().numpy().flatten()
-        y_np = self.proj @ x_np
-        return torch.tensor(
-            y_np.reshape((1, 1, self.mx, self.my)), device=x.device
-        )  # Convert back to PyTorch
+        """Applies the projection operator (forward pass), handling device."""
+        input_device = x.device
+        input_dtype = x.dtype
+        batch_size = x.shape[0]
+
+        # Decide path: Use GPU only if requested, available, AND input is on GPU
+        run_on_gpu = self.use_gpu and x.is_cuda
+
+        if run_on_gpu:
+            # --- GPU Path (via CuPy) ---
+            try:
+                x_shape_original = x.shape  # (N, C, nx, ny)
+                # ASTRA usually works with flat 2D or 3D, need C=1?
+                if x.shape[1] != 1:
+                    warnings.warn(
+                        f"Input tensor has {x.shape[1]} channels, expected 1. Using first channel."
+                    )
+                    x = x[:, 0:1, ...]  # Take first channel, keep dim
+
+                # Reshape for ASTRA (N, nx*ny) or just (nx, ny) if OpTomo handles loop?
+                # OpTomo likely expects (nx, ny) based on original code.
+                # We must loop outside if OpTomo doesn't handle batch.
+                # Let's assume the OperatorFunction loop handles batching.
+                # Input x here is (1, 1, nx, ny)
+                x_flat_shape = (self.nx, self.ny)
+                x_gpu_flat = x.reshape(x_flat_shape)  # Shape (nx, ny)
+
+                x_cp = cupy.asarray(x_gpu_flat)  # No CPU transfer
+
+                # Perform ASTRA operation
+                y_cp = self.proj @ x_cp  # Assumes OpTomo accepts CuPy
+
+                # Convert result back to PyTorch GPU tensor
+                y = torch.as_tensor(y_cp, device=input_device)  # No CPU transfer
+
+                # Reshape back to PyTorch standard (1, 1, mx, my)
+                y = y.reshape((1, 1, self.mx, self.my))  # Add back batch/channel
+
+            except Exception as e:
+                warnings.warn(f"GPU _matvec failed: {e}. Falling back to CPU path.")
+                run_on_gpu = False  # Force CPU path on failure
+
+        # --- CPU Path (NumPy) ---
+        # Executes if run_on_gpu is False (due to config, availability, input device, or GPU error)
+        if not run_on_gpu:
+            x_np = x.reshape(self.nx, self.ny).cpu().numpy()  # Ensure CPU and NumPy
+            y_np = self.proj @ x_np
+
+            # Convert back to PyTorch tensor on the original device
+            y = torch.tensor(
+                y_np.reshape((1, 1, self.mx, self.my)),  # Add back batch/channel
+                device=input_device,
+                dtype=input_dtype,
+            )
+
+        # The OperatorFunction loop will concatenate the batch results
+        return y
 
     def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
-        """CT backprojection: Converts PyTorch -> NumPy, restores channel"""
-        y_np = y.cpu().numpy().flatten()
-        x_np = self.proj.T @ y_np.flatten()  # ASTRA expects (sinogram_dim, proj)
-        return torch.tensor(x_np.reshape((1, 1, self.nx, self.ny)), device=y.device)
+        """Applies the backprojection operator (adjoint), handling device."""
+        input_device = y.device
+        input_dtype = y.dtype
+        batch_size = y.shape[0]
 
-    # FBP
-    def FBP(self, y: torch.Tensor) -> torch.Tensor:
-        # Compute x = K^Tx on the first element y
-        x = self.proj.reconstruct("FBP_CUDA", y[0].numpy().flatten())
-        x = torch.tensor(x.reshape((1, 1, self.nx, self.ny)))
+        # Decide path: Use GPU only if requested, available, AND input is on GPU
+        run_on_gpu = self.use_gpu and y.is_cuda
 
-        # In case there are multiple y, compute x = K^Ty on all of them
-        if y.shape[0] > 1:
-            for i in range(1, y.shape[0]):
-                x_tmp = self.proj.reconstruct("FBP_CUDA", y[i].numpy().flatten())
-                x_tmp = torch.tensor(x_tmp.reshape((1, 1, self.nx, self.ny)))
-                x = torch.cat((x, x_tmp))
+        if run_on_gpu:
+            # --- GPU Path (via CuPy) ---
+            try:
+                y_shape_original = y.shape  # (N, C, mx, my)
+                if y.shape[1] != 1:
+                    warnings.warn(
+                        f"Input tensor has {y.shape[1]} channels, expected 1. Using first channel."
+                    )
+                    y = y[:, 0:1, ...]
+
+                # Reshape for ASTRA (mx, my) assuming OperatorFunction loop
+                y_flat_shape = (self.mx, self.my)
+                y_gpu_flat = y.reshape(y_flat_shape)
+
+                y_cp = cupy.asarray(y_gpu_flat)  # No CPU transfer
+
+                # Perform ASTRA adjoint operation
+                x_cp = self.proj.T @ y_cp  # Assumes OpTomo.T accepts CuPy
+
+                # Convert result back to PyTorch GPU tensor
+                x = torch.as_tensor(x_cp, device=input_device)  # No CPU transfer
+
+                # Reshape back to PyTorch standard (1, 1, nx, ny)
+                x = x.reshape((1, 1, self.nx, self.ny))
+
+            except Exception as e:
+                warnings.warn(f"GPU _adjoint failed: {e}. Falling back to CPU path.")
+                run_on_gpu = False  # Force CPU path on failure
+
+        # --- CPU Path (NumPy) ---
+        if not run_on_gpu:
+            y_np = (
+                y.reshape(self.mx, self.my).detach().cpu().numpy()
+            )  # Ensure CPU and NumPy
+            x_np = self.proj.T @ y_np
+
+            # Convert back to PyTorch tensor on the original device
+            x = torch.tensor(
+                x_np.reshape((1, 1, self.nx, self.ny)),  # Add back batch/channel
+                device=input_device,
+                dtype=input_dtype,
+            )
+
+        # The OperatorFunction loop will concatenate the batch results
         return x
+
+    # --- FBP Method ---
+    def FBP(self, y: torch.Tensor) -> torch.Tensor:
+        """Performs Filtered Back-Projection reconstruction."""
+        input_device = y.device
+        input_dtype = y.dtype
+        batch_size = y.shape[0]
+
+        results = []
+        for i in range(batch_size):
+            y_slice = y[i : i + 1]  # Shape (1, C, mx, my)
+            slice_device = y_slice.device  # Device of this specific slice
+
+            # Decide path for this slice
+            run_on_gpu = self.use_gpu and slice_device.type == "cuda"
+            current_fbp_algo = self.fbp_algorithm
+
+            # Adjust FBP algorithm if we determined GPU use but slice is on CPU
+            if current_fbp_algo == "FBP_CUDA" and slice_device.type != "cuda":
+                warnings.warn(
+                    "FBP_CUDA requested but input slice is on CPU. Using 'FBP'."
+                )
+                current_fbp_algo = "FBP"
+            elif (
+                current_fbp_algo == "FBP"
+                and slice_device.type == "cuda"
+                and self.use_gpu
+            ):
+                # If default is CPU but slice is GPU and we allow GPU, maybe try CUDA?
+                # Let's stick to the initialized self.fbp_algorithm primarily.
+                pass
+
+            x_recon_np = None
+            if run_on_gpu:
+                # --- GPU FBP Path ---
+                try:
+                    if y_slice.shape[1] != 1:
+                        warnings.warn(
+                            f"FBP input slice has {y_slice.shape[1]} channels, expected 1. Using first."
+                        )
+                        y_slice = y_slice[:, 0:1, ...]
+
+                    y_slice_flat = y_slice.reshape(self.mx, self.my)
+                    y_cp = cupy.asarray(y_slice_flat)
+
+                    # Perform ASTRA reconstruction
+                    # NOTE: Check if reconstruct method *actually* takes CuPy arrays.
+                    # It might still expect NumPy, requiring cupy.asnumpy(y_cp).
+                    # Let's assume it might need NumPy for now based on common practice
+                    y_np_from_gpu = cupy.asnumpy(y_cp)
+                    x_recon_np = self.proj.reconstruct(current_fbp_algo, y_np_from_gpu)
+
+                    # Alternative: If reconstruct *does* take CuPy:
+                    # x_recon_cp = self.proj.reconstruct(current_fbp_algo, y_cp)
+                    # x_recon_np = cupy.asnumpy(x_recon_cp)
+
+                except Exception as e:
+                    warnings.warn(
+                        f"GPU FBP failed for slice {i}: {e}. Falling back to CPU."
+                    )
+                    run_on_gpu = False  # Force CPU path for this slice
+                    if current_fbp_algo == "FBP_CUDA":
+                        current_fbp_algo = "FBP"
+
+            # --- CPU FBP Path ---
+            if not run_on_gpu:
+                y_slice_np = (
+                    y_slice.reshape(self.mx, self.my).cpu().numpy()
+                )  # Ensure CPU, NumPy
+                try:
+                    x_recon_np = self.proj.reconstruct(current_fbp_algo, y_slice_np)
+                except Exception as e:
+                    print(f"CPU FBP failed for slice {i}: {e}")
+                    # Create a zero tensor as fallback? Or raise error?
+                    x_recon_np = np.zeros((self.nx, self.ny), dtype=y_slice_np.dtype)
+
+            # Convert result back to PyTorch tensor on the original slice device
+            x_tmp = torch.tensor(
+                x_recon_np.reshape((1, 1, self.nx, self.ny)),  # Add back batch/channel
+                device=slice_device,  # Place on the device of the input slice y[i]
+                dtype=input_dtype,
+            )
+            results.append(x_tmp)
+
+        # Stack results from all slices
+        return torch.cat(results, dim=0).to(
+            input_device
+        )  # Ensure final tensor is on input y's device
+
+    # Cleanup method (optional but good practice for ASTRA)
+    def __del__(self):
+        try:
+            if hasattr(self, "proj_id") and self.proj_id:
+                astra.projector.delete(self.proj_id)
+            if hasattr(self, "vol_geom") and self.vol_geom:
+                # Geometry deletion might not be necessary or available via API
+                pass
+            if hasattr(self, "proj_geom") and self.proj_geom:
+                # Geometry deletion might not be necessary or available via API
+                pass
+        except Exception as e:
+            # Might fail if ASTRA is already unloaded during shutdown
+            # print(f"Ignoring error during ASTRA object cleanup: {e}")
+            pass
 
 
 class Blurring(Operator):
