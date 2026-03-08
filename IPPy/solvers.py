@@ -179,7 +179,7 @@ class ChambollePockTpVConstrained:
 
             # Update w
             x_grad = self.grad(xx)
-            ww = w + sigma * x_grad
+            ww = w + sigma * nu * x_grad
 
             abs_ww = torch.square(ww[:, 0:1]) + torch.square(ww[:, 1:2])
             abs_ww = torch.cat((abs_ww, abs_ww), dim=1)
@@ -376,7 +376,7 @@ class ChambollePockTpVUnconstrained:
         con = True
         while con and (k < maxiter):
             # Update y
-            y = (y + sigma * (self.K(xx) - y_delta)) / (1 + lmbda * sigma)
+            y = (y + sigma * (self.K(xx) - y_delta)) / (1 + sigma)
 
             # Compute the magnitude of the gradient
             grad_x = self.grad(xx)
@@ -390,7 +390,7 @@ class ChambollePockTpVUnconstrained:
             x_grad = self.grad(xx)
             ww = w + sigma * x_grad
 
-            abs_ww = torch.square(ww[:, 0:1]) + torch.square(ww[:, 1:2])
+            abs_ww = torch.sqrt(torch.square(ww[:, 0:1]) + torch.square(ww[:, 1:2]))
             abs_ww = torch.cat((abs_ww, abs_ww), dim=1)
 
             lmbda_vec_over_nu = lmbda * WW / nu
