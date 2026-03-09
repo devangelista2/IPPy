@@ -5,27 +5,7 @@ import torch
 import torch.nn.functional as F
 
 import warnings  # To warn if falling back to CPU
-
-# Try importing CuPy
-try:
-    import cupy
-
-    CUPY_AVAILABLE = True
-except ImportError:
-    CUPY_AVAILABLE = False
-    warnings.warn(
-        "CuPy not found. GPU acceleration for ASTRA via CuPy will be disabled."
-    )
-
-# Try importing ASTRA
-try:
-    import astra
-
-    ASTRA_AVAILABLE = True
-except ImportError:
-    ASTRA_AVAILABLE = False
-    warnings.warn("ASTRA toolbox not found. CTProjector will not work.")
-    # You might want to raise an error or handle this more gracefully
+import astra
 
 
 class OperatorFunction(torch.autograd.Function):
@@ -96,6 +76,33 @@ class Operator:
         raise NotImplementedError
 
 
+class Identity(Operator):
+    def __init__(
+        self,
+        img_shape,
+    ):
+        """
+        Initializes the Identity operator.
+        """
+        super().__init__()
+
+        # Shape setup
+        self.nx, self.ny = img_shape
+        self.mx, self.my = img_shape
+
+    def _matvec(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the identity operator.
+        """
+        return x
+
+    def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the transposed identity operator.
+        """
+        return y
+
+
 class CTProjector(Operator):
     r"""
     Implements a CTProjector operator using the ASTRA toolbox.
@@ -126,14 +133,9 @@ class CTProjector(Operator):
         geometry: str = "parallel",
         source_origin: float = 1800.0,
         origin_det: float = 500.0,
-        force_cpu: bool = False,
+        force_cpu: bool = True,
     ) -> None:
         super().__init__()
-
-        if not ASTRA_AVAILABLE:
-            raise ImportError(
-                "ASTRA toolbox is required for CTProjector but not found."
-            )
 
         # Input setup
         self.nx, self.ny = img_shape
@@ -156,12 +158,12 @@ class CTProjector(Operator):
         self.mx, self.my = self.n_angles, self.det_size
 
         # Determine if GPU should be used
-        self.use_gpu = torch.cuda.is_available() and CUPY_AVAILABLE and not force_cpu
+        self.use_gpu = torch.cuda.is_available() and not force_cpu
         if force_cpu and torch.cuda.is_available():
             warnings.warn("CUDA is available but CTProjector is forced to use CPU.")
         elif not torch.cuda.is_available() and not force_cpu:
             print("CUDA not available. CTProjector will use CPU.")
-        elif not CUPY_AVAILABLE and torch.cuda.is_available() and not force_cpu:
+        elif torch.cuda.is_available() and not force_cpu:
             warnings.warn(
                 "CUDA available but CuPy not found. CTProjector limited to CPU operations for ASTRA data transfer."
             )
@@ -302,38 +304,8 @@ class CTProjector(Operator):
         run_on_gpu = self.use_gpu and x.is_cuda
 
         if run_on_gpu:
-            # --- GPU Path (via CuPy) ---
-            try:
-                x_shape_original = x.shape  # (N, C, nx, ny)
-                # ASTRA usually works with flat 2D or 3D, need C=1?
-                if x.shape[1] != 1:
-                    warnings.warn(
-                        f"Input tensor has {x.shape[1]} channels, expected 1. Using first channel."
-                    )
-                    x = x[:, 0:1, ...]  # Take first channel, keep dim
-
-                # Reshape for ASTRA (N, nx*ny) or just (nx, ny) if OpTomo handles loop?
-                # OpTomo likely expects (nx, ny) based on original code.
-                # We must loop outside if OpTomo doesn't handle batch.
-                # Let's assume the OperatorFunction loop handles batching.
-                # Input x here is (1, 1, nx, ny)
-                x_flat_shape = (self.nx, self.ny)
-                x_gpu_flat = x.reshape(x_flat_shape)  # Shape (nx, ny)
-
-                x_cp = cupy.asarray(x_gpu_flat)  # No CPU transfer
-
-                # Perform ASTRA operation
-                y_cp = self.proj @ x_cp  # Assumes OpTomo accepts CuPy
-
-                # Convert result back to PyTorch GPU tensor
-                y = torch.as_tensor(y_cp, device=input_device)  # No CPU transfer
-
-                # Reshape back to PyTorch standard (1, 1, mx, my)
-                y = y.reshape((1, 1, self.mx, self.my))  # Add back batch/channel
-
-            except Exception as e:
-                warnings.warn(f"GPU _matvec failed: {e}. Falling back to CPU path.")
-                run_on_gpu = False  # Force CPU path on failure
+            # TODO: IMPLEMENT RUN ON GPU>
+            pass
 
         # --- CPU Path (NumPy) ---
         # Executes if run_on_gpu is False (due to config, availability, input device, or GPU error)
@@ -361,36 +333,11 @@ class CTProjector(Operator):
         run_on_gpu = self.use_gpu and y.is_cuda
 
         if run_on_gpu:
-            # --- GPU Path (via CuPy) ---
-            try:
-                y_shape_original = y.shape  # (N, C, mx, my)
-                if y.shape[1] != 1:
-                    warnings.warn(
-                        f"Input tensor has {y.shape[1]} channels, expected 1. Using first channel."
-                    )
-                    y = y[:, 0:1, ...]
-
-                # Reshape for ASTRA (mx, my) assuming OperatorFunction loop
-                y_flat_shape = (self.mx, self.my)
-                y_gpu_flat = y.reshape(y_flat_shape)
-
-                y_cp = cupy.asarray(y_gpu_flat)  # No CPU transfer
-
-                # Perform ASTRA adjoint operation
-                x_cp = self.proj.T @ y_cp  # Assumes OpTomo.T accepts CuPy
-
-                # Convert result back to PyTorch GPU tensor
-                x = torch.as_tensor(x_cp, device=input_device)  # No CPU transfer
-
-                # Reshape back to PyTorch standard (1, 1, nx, ny)
-                x = x.reshape((1, 1, self.nx, self.ny))
-
-            except Exception as e:
-                warnings.warn(f"GPU _adjoint failed: {e}. Falling back to CPU path.")
-                run_on_gpu = False  # Force CPU path on failure
+            # TODO: Implement run on GPU
+            pass
 
         # --- CPU Path (NumPy) ---
-        if not run_on_gpu:
+        else:
             y_np = (
                 y.reshape(self.mx, self.my).detach().cpu().numpy()
             )  # Ensure CPU and NumPy
@@ -439,38 +386,11 @@ class CTProjector(Operator):
 
             x_recon_np = None
             if run_on_gpu:
-                # --- GPU FBP Path ---
-                try:
-                    if y_slice.shape[1] != 1:
-                        warnings.warn(
-                            f"FBP input slice has {y_slice.shape[1]} channels, expected 1. Using first."
-                        )
-                        y_slice = y_slice[:, 0:1, ...]
-
-                    y_slice_flat = y_slice.reshape(self.mx, self.my)
-                    y_cp = cupy.asarray(y_slice_flat)
-
-                    # Perform ASTRA reconstruction
-                    # NOTE: Check if reconstruct method *actually* takes CuPy arrays.
-                    # It might still expect NumPy, requiring cupy.asnumpy(y_cp).
-                    # Let's assume it might need NumPy for now based on common practice
-                    y_np_from_gpu = cupy.asnumpy(y_cp)
-                    x_recon_np = self.proj.reconstruct(current_fbp_algo, y_np_from_gpu)
-
-                    # Alternative: If reconstruct *does* take CuPy:
-                    # x_recon_cp = self.proj.reconstruct(current_fbp_algo, y_cp)
-                    # x_recon_np = cupy.asnumpy(x_recon_cp)
-
-                except Exception as e:
-                    warnings.warn(
-                        f"GPU FBP failed for slice {i}: {e}. Falling back to CPU."
-                    )
-                    run_on_gpu = False  # Force CPU path for this slice
-                    if current_fbp_algo == "FBP_CUDA":
-                        current_fbp_algo = "FBP"
+                # TODO: Implement run on GPU
+                pass
 
             # --- CPU FBP Path ---
-            if not run_on_gpu:
+            else:
                 y_slice_np = (
                     y_slice.reshape(self.mx, self.my).cpu().numpy()
                 )  # Ensure CPU, NumPy
@@ -682,31 +602,33 @@ class Gradient(Operator):
         self.mx, self.my = img_shape
 
     def _matvec(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (N,1,nx,ny)
         N, c, nx, ny = x.shape
-        D_h = torch.diff(x, n=1, dim=2, prepend=torch.zeros((N, c, 1, ny)))
-        D_v = torch.diff(x, n=1, dim=3, prepend=torch.zeros((N, c, nx, 1)))
 
-        return torch.cat((D_h, D_v), dim=1)
+        gx = torch.zeros((N, 1, nx, ny), device=x.device, dtype=x.dtype)
+        gy = torch.zeros((N, 1, nx, ny), device=x.device, dtype=x.dtype)
+
+        gx[:, :, :-1, :] = x[:, :, 1:, :] - x[:, :, :-1, :]
+        gy[:, :, :, :-1] = x[:, :, :, 1:] - x[:, :, :, :-1]
+
+        return torch.cat((gx, gy), dim=1)
 
     def _adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        # y: (N,2,nx,ny)
         N, c, nx, ny = y.shape
+        assert c == 2
 
-        D_h = y[0, 0, :, :]
-        D_v = y[0, 1, :, :]
+        p = y[:, 0:1, :, :]
+        q = y[:, 1:2, :, :]
 
-        D_h_T = (
-            torch.flipud(
-                torch.diff(torch.flipud(D_h), n=1, dim=0, prepend=torch.zeros((1, ny)))
-            )
-            .unsqueeze(0)
-            .unsqueeze(1)
-        )
-        D_v_T = (
-            torch.fliplr(
-                torch.diff(torch.fliplr(D_v), n=1, dim=1, prepend=torch.zeros((nx, 1)))
-            )
-            .unsqueeze(0)
-            .unsqueeze(1)
-        )
+        out = torch.zeros((N, 1, nx, ny), device=y.device, dtype=y.dtype)
 
-        return D_h_T + D_v_T
+        # Horizontal adjoint
+        out[:, :, :-1, :] -= p[:, :, :-1, :]
+        out[:, :, 1:, :] += p[:, :, :-1, :]
+
+        # Vertical adjoint
+        out[:, :, :, :-1] -= q[:, :, :, :-1]
+        out[:, :, :, 1:] += q[:, :, :, :-1]
+
+        return out

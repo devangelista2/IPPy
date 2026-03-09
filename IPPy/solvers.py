@@ -318,6 +318,8 @@ class ChambollePockTpVUnconstrained:
         starting_point: torch.Tensor | None = None,
         eta: float = 2e-3,
         maxiter: int = 100,
+        tolf: float = 1e-6,
+        tolx: float = 1e-6,
         p: int = 1,
         verbose: bool = False,
         *args,
@@ -430,13 +432,15 @@ class ChambollePockTpVUnconstrained:
             info["obj"][k] = 0.5 * res + lmbda * ftpv
 
             # Stopping criteria
-            c = math.sqrt(res) / (torch.max(y_delta) * math.sqrt(self.mx * self.my))
+            norm_res = math.sqrt(res) / (
+                torch.max(y_delta) * math.sqrt(self.mx * self.my) + 1e-8
+            )
             d_abs = torch.norm(x.flatten() - xtmp.flatten())
 
-            if (c >= 9e-6) and (c <= 1.1e-5):
+            if norm_res <= tolf:
                 con = False
 
-            if d_abs < 1e-3 * (1 + torch.norm(xtmp.flatten())):
+            if d_abs < tolx * (1e-6 + torch.norm(xtmp.flatten())):
                 con = False
 
             # Update k
