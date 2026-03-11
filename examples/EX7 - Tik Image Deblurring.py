@@ -19,9 +19,14 @@ print(f"Device used: {device}.")
 x_true = load_image("../data/Mayo/test/C081/0.png")
 print(f"Shape of the GT: {list(x_true.shape)}.")
 
-# Create the identity operator
-K = operators.Identity(
+# Create the blurring operator
+kernel_size = 15
+sigma = 1.5
+K = operators.Blurring(
     img_shape=x_true.shape[-2:],
+    kernel_type="gaussian",
+    kernel_size=kernel_size,
+    kernel_variance=sigma**2,
 )
 
 # Build test problem
@@ -30,7 +35,7 @@ y_delta = K(x_true) + noise_level * torch.randn_like(x_true)
 print(f"Shape of the measurements: {list(y_delta.shape)}.")
 
 # Set up the solver
-lambda_tik = 1
+lambda_tik = 0.1
 maxiter = 100
 tolf = tolx = 1e-7
 solver = solvers.CGLS(K)
